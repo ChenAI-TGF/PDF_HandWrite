@@ -1,0 +1,38 @@
+{
+    "zh": {
+        "font_name": "手书体",
+        "font_size": 16,
+        "char_spacing": 0.0,
+        "line_spacing": 1.1,
+        "jitter_pos": 0.6,
+        "jitter_size": 0.8,
+        "jitter_rot": 5.1,
+        "line_jitter_x": 6.0,
+        "line_jitter_y": 1.5,
+        "line_tilt": 0.5,
+        "color_btn": ""
+    },
+    "en": {
+        "font_name": "瑞美加张清平硬笔楷书",
+        "font_size": 15,
+        "char_spacing": -7.5,
+        "line_spacing": 1.0,
+        "jitter_pos": 0.5,
+        "jitter_size": 0.5,
+        "jitter_rot": 1.5,
+        "line_jitter_x": 10.0,
+        "line_jitter_y": 2.0,
+        "line_tilt": 2.0,
+        "color_btn": ""
+    },
+    "zh_color": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "en_color": [
+        0.0,
+        0.0,
+        0.0
+    ]
+}

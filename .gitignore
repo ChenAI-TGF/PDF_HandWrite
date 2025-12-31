@@ -1,0 +1,30 @@
+# Python bytecode and cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+.env/
+*.egg-info/
+
+# Project-generated files
+image/  # Local folder for downloaded images (not needed in repo)
+
+# System-specific files
+.DS_Store  # macOS
+Thumbs.db  # Windows
+*.swp      # Vim swap files
+*.swo      # Vim swap files
+
+# IDE-specific files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
