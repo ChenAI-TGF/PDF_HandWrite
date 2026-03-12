@@ -257,6 +257,13 @@ class PDFHandwriterApp:
         return mapped_x, mapped_y
 
     def generate_handwriting_logic(self, is_preview=False):
+        """
+        生成手写文字逻辑
+        Generate handwriting text logic
+        
+        Args:
+            is_preview: 是否为预览模式 / Whether in preview mode
+        """
         text = self.text_editor.get("1.0", tk.END).strip("\n")
         if not text or not self.poly_id or len(self.quad_points) < 8: return
         if not self.doc: return
@@ -264,6 +271,7 @@ class PDFHandwriterApp:
         page = self.doc[self.current_page_num]
         
         # 使用四边形的最小包围矩形作为文字布局区域
+        # Use minimum bounding rectangle of quadrilateral as text layout area
         qp = self.quad_points
         x1 = min(qp[0], qp[2], qp[4], qp[6]) / self.zoom
         y1 = min(qp[1], qp[3], qp[5], qp[7]) / self.zoom
@@ -310,17 +318,21 @@ class PDFHandwriterApp:
                     continue
 
                 # 检测换行：如果字符超出边界且不是行首字符
+                # Line break detection: if character exceeds boundary and not at line start
                 if curr_x + f_size > x2 and line_char_count > 0:
                     curr_x = line_start_x
                     # 行间距 = 上一行高度 * 1.5 + 倾斜角度额外边距（基于区域宽度）
+                    # Line spacing = previous line height * 1.5 + tilt margin (based on area width)
                     # 估计上一行的宽度作为倾斜补偿基础
-                    estimated_line_width = min(x2 - line_start_x, 100)  # 限制最大估计宽度
+                    # Estimate previous line width as tilt compensation basis
+                    estimated_line_width = min(x2 - line_start_x, 100)  # 限制最大估计宽度 / Limit max estimated width
                     extra_tilt_margin = abs(line_angle_rad) * estimated_line_width * 0.8 if max_row_height > 0 else 0
                     line_base_y += max_row_height * 1.5 + extra_tilt_margin
-                    max_row_height = 0  # 重置为新行重新计算
+                    max_row_height = 0  # 重置为新行重新计算 / Reset for new line calculation
                     line_char_count = 0
                 
                 # 更新当前行最大高度（换行后重新计算）
+                # Update current line max height (recalculated after line break)
                 max_row_height = max(max_row_height, char_line_height)
                 
                 if line_base_y > y2 + 10: break
@@ -393,7 +405,8 @@ class PDFHandwriterApp:
                 line_char_count += 1
             
             # 段落间距 = 最后一行高度 * 2.0 + 倾斜角度额外边距（基于区域宽度）
-            estimated_line_width = min(x2 - x1, 100)  # 估计行宽度
+            # Paragraph spacing = last line height * 2.0 + tilt margin (based on area width)
+            estimated_line_width = min(x2 - x1, 100)  # 估计行宽度 / Estimate line width
             extra_paragraph_margin = abs(paragraph_tilt_rad) * estimated_line_width * 0.8 if max_row_height > 0 else 0
             paragraph_spacing = (max_row_height * 2.0 + extra_paragraph_margin) if max_row_height > 0 else p_line['font_size'].get() * 2.0
             curr_y = line_base_y + paragraph_spacing
@@ -468,11 +481,15 @@ class PDFHandwriterApp:
             self.render_page(auto_zoom=True)
 
     def calculate_auto_zoom(self, page):
-        """计算自适应缩放比例使PDF页面完整显示在画布中"""
+        """
+        计算自适应缩放比例使PDF页面完整显示在画布中
+        Calculate auto-zoom ratio to fit PDF page completely within canvas
+        """
         canvas_width = self.canvas.winfo_width()
         canvas_height = self.canvas.winfo_height()
         
         # 如果画布尺寸未知，使用默认缩放
+        # Use default zoom if canvas dimensions are unknown
         if canvas_width <= 10 or canvas_height <= 10:
             return 1.5
             
@@ -480,26 +497,41 @@ class PDFHandwriterApp:
         page_height = page.rect.height
         
         # 计算宽高缩放比例，留出10px边距
+        # Calculate width/height ratios with 10px margin
         width_ratio = (canvas_width - 20) / page_width
         height_ratio = (canvas_height - 20) / page_height
         
         # 选择较小的比例确保页面完全显示
+        # Choose smaller ratio to ensure page fits completely
         zoom = min(width_ratio, height_ratio)
         
         # 限制缩放范围在0.5到3.0之间
+        # Limit zoom range between 0.5 and 3.0
         return max(0.5, min(zoom, 3.0))
     
     def fit_to_window(self):
-        """调整缩放使PDF页面完整显示在窗口中"""
+        """
+        调整缩放使PDF页面完整显示在窗口中
+        Adjust zoom to fit PDF page completely within window
+        """
         if self.doc:
             self.render_page(auto_zoom=True)
     
     def render_page(self, preserve_rect=False, auto_zoom=False):
+        """
+        渲染PDF页面到画布
+        Render PDF page to canvas
+        
+        Args:
+            preserve_rect: 是否保留选择矩形 / Whether to preserve selection rectangle
+            auto_zoom: 是否自动计算缩放比例 / Whether to auto-calculate zoom ratio
+        """
         if not self.doc: return
         page = self.doc[self.current_page_num]
         self.page_label.config(text=f"页码: {self.current_page_num + 1} / {self.doc.page_count}")
         
         # 如果是首次加载或auto_zoom为True，计算自适应缩放
+        # Calculate auto-zoom if first load or auto_zoom is True
         if auto_zoom:
             self.zoom = self.calculate_auto_zoom(page)
         
@@ -508,6 +540,7 @@ class PDFHandwriterApp:
         self.tk_img = ImageTk.PhotoImage(img)
         
         # 调整画布滚动区域以适应图像大小
+        # Adjust canvas scroll region to fit image size
         self.canvas.config(scrollregion=(0, 0, pix.width, pix.height))
         
         self.canvas.delete("all")
