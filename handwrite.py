@@ -29,8 +29,12 @@ class PDFHandwriterApp:
         self.current_page_num = 0
         self.zoom = 1.5
         self.rect_id = None
+        self.poly_id = None  # 多边形ID
+        self.control_points = []  # 控制点ID列表
+        self.dragging_point = -1  # 正在拖拽的控制点索引
         self.start_x = self.start_y = 0
         self.end_x = self.end_y = 0
+        self.quad_points = []  # 四边形顶点坐标 [x1,y1, x2,y2, x3,y3, x4,y4]
 
         self.params = {
             'zh': self.init_param_vars(default_font_size=22),
@@ -55,15 +59,44 @@ class PDFHandwriterApp:
             'jitter_pos': tk.DoubleVar(value=0.5),
             'jitter_size': tk.DoubleVar(value=0.5),
             'jitter_rot': tk.DoubleVar(value=1.5),
+            'vertical_jitter': tk.DoubleVar(value=2.0),  # 垂直浮动
+            'color_variation': tk.DoubleVar(value=0.1),  # 颜色变化
             # --- 每一行的随机扰动参数 ---
             'line_jitter_x': tk.DoubleVar(value=10.0), 
             'line_jitter_y': tk.DoubleVar(value=2.0),  
-            'line_tilt': tk.DoubleVar(value=2.0)       
+            'line_tilt': tk.DoubleVar(value=2.0),
+            # --- 纸张印痕效果参数 ---
+            'indent_enabled': tk.BooleanVar(value=False),      # 启用/禁用
+            'indent_strength': tk.DoubleVar(value=0.3),        # 印痕强度 0-1
+            'indent_offset_x': tk.DoubleVar(value=0.3),        # X方向偏移 -1到1
+            'indent_offset_y': tk.DoubleVar(value=0.3),        # Y方向偏移 -1到1
+            'indent_opacity': tk.DoubleVar(value=0.4),         # 不透明度 0-1
+            'indent_color_mode': tk.StringVar(value='auto')    # 颜色模式: auto/gray/custom     
         }
         for v in vars.values():
             if isinstance(v, (tk.IntVar, tk.DoubleVar, tk.StringVar)):
                 v.trace_add("write", self.auto_refresh_preview)
         return vars
+
+    def calculate_indent_color(self, base_color, params):
+        """计算印痕颜色"""
+        mode = params['indent_color_mode'].get()
+        strength = params['indent_strength'].get()
+        
+        if mode == 'gray':
+            # 灰色印痕：根据强度调整灰度
+            gray_value = 0.7 + 0.3 * strength  # 0.7-1.0范围
+            return (gray_value, gray_value, gray_value)
+        elif mode == 'custom':
+            # 自定义颜色（暂不支持，返回灰色）
+            gray_value = 0.7 + 0.3 * strength
+            return (gray_value, gray_value, gray_value)
+        else:  # auto模式
+            # 基于主颜色变浅
+            r = min(1.0, base_color[0] + 0.3 * strength)
+            g = min(1.0, base_color[1] + 0.3 * strength)
+            b = min(1.0, base_color[2] + 0.3 * strength)
+            return (r, g, b)
 
     def is_chinese(self, char):
         if '\u4e00' <= char <= '\u9fff': return True
@@ -75,7 +108,10 @@ class PDFHandwriterApp:
         for f in files:
             name = os.path.splitext(f)[0]
             self.font_dict[name] = os.path.join(self.ttf_dir, f)
-        if not self.font_dict: self.font_dict["(无字体)"] = "simkai.ttf"
+        if not self.font_dict: 
+            self.font_dict["(默认字体)"] = "simkai.ttf"
+            print("提示：TTF 文件夹为空，使用默认字体")
+            print("请下载手写字体放入 TTF 文件夹，详见 FONT_RECOMMENDATIONS.md")
 
     def setup_ui(self):
         top_frame = tk.Frame(self.root, bg="#2c3e50", pady=5)
@@ -89,6 +125,9 @@ class PDFHandwriterApp:
         self.page_label = tk.Label(page_ctrl_frame, text="页码: 0 / 0", bg="#2c3e50", fg="white", width=15)
         self.page_label.pack(side=tk.LEFT, padx=10)
         tk.Button(page_ctrl_frame, text="下一页 >", command=self.next_page).pack(side=tk.LEFT, padx=5)
+        
+        # 添加适应窗口按钮
+        tk.Button(top_frame, text="适应窗口", command=self.fit_to_window, bg="#9b59b6", fg="white").pack(side=tk.LEFT, padx=10)
 
         main_frame = tk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -136,7 +175,7 @@ class PDFHandwriterApp:
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.canvas.bind("<ButtonPress-1>", self.on_button_press)
         self.canvas.bind("<B1-Motion>", self.on_move_press)
-        self.canvas.bind("<ButtonRelease-1>", self.auto_refresh_preview)
+        self.canvas.bind("<ButtonRelease-1>", self.on_button_release)
 
     def build_param_tab(self, parent, lang_key):
         p = self.params[lang_key]
@@ -169,18 +208,67 @@ class PDFHandwriterApp:
         self.create_scale(container, "字位置抖动", p['jitter_pos'], 0, 5, 0.1)
         self.create_scale(container, "字大小抖动", p['jitter_size'], 0, 5, 0.1)
         self.create_scale(container, "字旋转抖动", p['jitter_rot'], 0, 20, 0.1)
+        self.create_scale(container, "垂直浮动", p['vertical_jitter'], 0, 10, 0.5)
+        self.create_scale(container, "颜色深浅变化", p['color_variation'], 0, 0.5, 0.05)
+
+        ttk.Separator(container, orient='horizontal').pack(fill='x', pady=10)
+        tk.Label(container, text="[ 纸张印痕效果 ]", fg="#8e44ad", font=("", 9, "bold")).pack()
+
+        # 启用复选框
+        tk.Checkbutton(container, text="启用纸张印痕", variable=p['indent_enabled']).pack(anchor=tk.W, pady=5)
+
+        # 印痕参数滑块
+        self.create_scale(container, "印痕强度", p['indent_strength'], 0, 1, 0.05)
+        self.create_scale(container, "X方向偏移", p['indent_offset_x'], -1, 1, 0.1)
+        self.create_scale(container, "Y方向偏移", p['indent_offset_y'], -1, 1, 0.1)
+        self.create_scale(container, "不透明度", p['indent_opacity'], 0, 1, 0.05)
+
+        # 颜色模式选择
+        tk.Label(container, text="印痕颜色模式:").pack(anchor=tk.W, pady=(5,0))
+        color_combo = ttk.Combobox(container, textvariable=p['indent_color_mode'], 
+                                  values=['auto', 'gray', 'custom'], state="readonly")
+        color_combo.pack(fill=tk.X, pady=2)
+        color_combo.current(0)
 
     def create_scale(self, parent, label, var, f, t, res=1):
         tk.Label(parent, text=f"{label}:").pack(anchor=tk.W)
         tk.Scale(parent, from_=f, to=t, resolution=res, orient=tk.HORIZONTAL, variable=var).pack(fill=tk.X)
 
+    def map_point_to_quad(self, x, y, x1, y1, x2, y2):
+        """将矩形内的点(x,y)映射到四边形内"""
+        if x2 == x1 or y2 == y1:
+            return x, y
+            
+        # 归一化坐标
+        u = (x - x1) / (x2 - x1)
+        v = (y - y1) / (y2 - y1)
+        
+        # 四边形顶点
+        qp = self.quad_points
+        A = (qp[0]/self.zoom, qp[1]/self.zoom)  # 左上
+        B = (qp[2]/self.zoom, qp[3]/self.zoom)  # 右上
+        C = (qp[4]/self.zoom, qp[5]/self.zoom)  # 右下
+        D = (qp[6]/self.zoom, qp[7]/self.zoom)  # 左下
+        
+        # 双线性插值
+        mapped_x = (1-u)*(1-v)*A[0] + u*(1-v)*B[0] + u*v*C[0] + (1-u)*v*D[0]
+        mapped_y = (1-u)*(1-v)*A[1] + u*(1-v)*B[1] + u*v*C[1] + (1-u)*v*D[1]
+        
+        return mapped_x, mapped_y
+
     def generate_handwriting_logic(self, is_preview=False):
         text = self.text_editor.get("1.0", tk.END).strip("\n")
-        if not text or not self.rect_id: return
+        if not text or not self.poly_id or len(self.quad_points) < 8: return
+        if not self.doc: return
 
         page = self.doc[self.current_page_num]
-        x1, y1 = min(self.start_x, self.end_x)/self.zoom, min(self.start_y, self.end_y)/self.zoom
-        x2, y2 = max(self.start_x, self.end_x)/self.zoom, max(self.start_y, self.end_y)/self.zoom
+        
+        # 使用四边形的最小包围矩形作为文字布局区域
+        qp = self.quad_points
+        x1 = min(qp[0], qp[2], qp[4], qp[6]) / self.zoom
+        y1 = min(qp[1], qp[3], qp[5], qp[7]) / self.zoom
+        x2 = max(qp[0], qp[2], qp[4], qp[6]) / self.zoom
+        y2 = max(qp[1], qp[3], qp[5], qp[7]) / self.zoom
         
         active_lang = 'zh' if self.notebook.index("current") == 0 else 'en'
         curr_y = y1 + self.params[active_lang]['font_size'].get()
@@ -189,9 +277,10 @@ class PDFHandwriterApp:
         if is_preview: random.seed(42) 
         else: random.seed()
 
+        paragraph_tilt_rad = 0  # 记录当前段落的倾斜角度
         for line in lines:
             if not line.strip():
-                curr_y += self.params[active_lang]['font_size'].get() * self.params[active_lang]['line_spacing'].get()
+                curr_y += self.params[active_lang]['font_size'].get() * self.params[active_lang]['line_spacing'].get() * 2.0
                 continue
 
             p_line = self.params[active_lang]
@@ -199,11 +288,13 @@ class PDFHandwriterApp:
             line_dy = random.uniform(-p_line['line_jitter_y'].get(), p_line['line_jitter_y'].get())
             line_angle_deg = random.uniform(-p_line['line_tilt'].get(), p_line['line_tilt'].get())
             line_angle_rad = math.radians(line_angle_deg)
+            paragraph_tilt_rad = line_angle_rad  # 保存当前段落的倾斜角度
 
             line_start_x = x1 + line_dx
             line_base_y = curr_y + line_dy
             curr_x = line_start_x
             max_row_height = 0 
+            line_char_count = 0
 
             for char in line:
                 lang = 'zh' if self.is_chinese(char) else 'en'
@@ -213,34 +304,82 @@ class PDFHandwriterApp:
                 f_path = self.font_dict.get(p['font_name'].get())
                 c_space = p['char_spacing'].get()
                 char_line_height = f_size * p['line_spacing'].get()
-                max_row_height = max(max_row_height, char_line_height)
 
                 if char == ' ': 
                     curr_x += f_size * 0.4
                     continue
 
-                if curr_x + f_size > x2:
+                # 检测换行：如果字符超出边界且不是行首字符
+                if curr_x + f_size > x2 and line_char_count > 0:
                     curr_x = line_start_x
-                    line_base_y += max_row_height
+                    # 行间距 = 上一行高度 * 1.5 + 倾斜角度额外边距（基于区域宽度）
+                    # 估计上一行的宽度作为倾斜补偿基础
+                    estimated_line_width = min(x2 - line_start_x, 100)  # 限制最大估计宽度
+                    extra_tilt_margin = abs(line_angle_rad) * estimated_line_width * 0.8 if max_row_height > 0 else 0
+                    line_base_y += max_row_height * 1.5 + extra_tilt_margin
+                    max_row_height = 0  # 重置为新行重新计算
+                    line_char_count = 0
+                
+                # 更新当前行最大高度（换行后重新计算）
+                max_row_height = max(max_row_height, char_line_height)
                 
                 if line_base_y > y2 + 10: break
 
                 char_jitter_x = random.uniform(-p['jitter_pos'].get(), p['jitter_pos'].get())
                 char_jitter_y = random.uniform(-p['jitter_pos'].get(), p['jitter_pos'].get())
+                # 垂直浮动
+                vertical_jitter = random.uniform(-p['vertical_jitter'].get(), p['vertical_jitter'].get())
                 char_jitter_rot = random.uniform(-p['jitter_rot'].get(), p['jitter_rot'].get())
                 char_jitter_fs = f_size + random.uniform(-p['jitter_size'].get(), p['jitter_size'].get())
 
                 tilt_y_offset = (curr_x - line_start_x) * math.tan(line_angle_rad)
 
-                # --- 重点：此处已移除随机颜色扰动，直接使用 base_rgb ---
-                final_color = self.zh_color if lang == 'zh' else self.en_color
+                # 基础颜色
+                base_color = self.zh_color if lang == 'zh' else self.en_color
+                # 颜色变化
+                color_var = p['color_variation'].get()
+                if color_var > 0:
+                    r = max(0, min(1, base_color[0] + random.uniform(-color_var, color_var)))
+                    g = max(0, min(1, base_color[1] + random.uniform(-color_var, color_var)))
+                    b = max(0, min(1, base_color[2] + random.uniform(-color_var, color_var)))
+                    final_color = (r, g, b)
+                else:
+                    final_color = base_color
 
                 try:
-                    final_y = line_base_y + tilt_y_offset + char_jitter_y
+                    final_y = line_base_y + tilt_y_offset + char_jitter_y + vertical_jitter
                     final_x = curr_x + char_jitter_x
-                    point = fitz.Point(final_x, final_y)
+                    # 将点映射到四边形内
+                    mapped_x, mapped_y = self.map_point_to_quad(final_x, final_y, x1, y1, x2, y2)
+                    point = fitz.Point(mapped_x, mapped_y)
                     total_rotation = line_angle_deg + char_jitter_rot
                     
+                    # 纸张印痕效果
+                    if p['indent_enabled'].get():
+                        # 计算偏移量（基于字体大小的比例）
+                        offset_x = p['indent_offset_x'].get() * char_jitter_fs * 0.2
+                        offset_y = p['indent_offset_y'].get() * char_jitter_fs * 0.2
+                        indent_point = fitz.Point(mapped_x + offset_x, mapped_y + offset_y)
+                        
+                        # 计算印痕颜色
+                        indent_color = self.calculate_indent_color(base_color, p)
+                        opacity = p['indent_opacity'].get()
+                        # 混合印痕颜色与白色（模拟不透明度）
+                        indent_color = (
+                            indent_color[0] * opacity + (1 - opacity),
+                            indent_color[1] * opacity + (1 - opacity),
+                            indent_color[2] * opacity + (1 - opacity)
+                        )
+                        
+                        # 绘制印痕层
+                        page.insert_text(indent_point, char,
+                                         fontsize=char_jitter_fs,
+                                         fontname=f"f_{lang}",
+                                         fontfile=f_path,
+                                         color=indent_color,
+                                         morph=(indent_point, fitz.Matrix(total_rotation)))
+                    
+                    # 绘制主文本层
                     page.insert_text(point, char, 
                                      fontsize=char_jitter_fs, 
                                      fontname=f"f_{lang}",
@@ -251,12 +390,17 @@ class PDFHandwriterApp:
                     print(f"Render Error: {e}")
                 
                 curr_x += f_size + c_space
+                line_char_count += 1
             
-            curr_y += max_row_height if max_row_height > 0 else p_line['font_size'].get() * 1.5
+            # 段落间距 = 最后一行高度 * 2.0 + 倾斜角度额外边距（基于区域宽度）
+            estimated_line_width = min(x2 - x1, 100)  # 估计行宽度
+            extra_paragraph_margin = abs(paragraph_tilt_rad) * estimated_line_width * 0.8 if max_row_height > 0 else 0
+            paragraph_spacing = (max_row_height * 2.0 + extra_paragraph_margin) if max_row_height > 0 else p_line['font_size'].get() * 2.0
+            curr_y = line_base_y + paragraph_spacing
             if curr_y > y2 + 20: break
 
     def toggle_preview_mode(self):
-        if not self.doc or not self.rect_id:
+        if not self.doc or not self.poly_id:
             messagebox.showwarning("提示", "请先在PDF上框选区域")
             return
         if not self.is_preview_mode:
@@ -281,7 +425,7 @@ class PDFHandwriterApp:
 
     def choose_color(self, lang_key):
         color_code = colorchooser.askcolor(title="颜色选择")
-        if color_code[1]:
+        if color_code[0] and color_code[1]:
             rgb = (color_code[0][0]/255, color_code[0][1]/255, color_code[0][2]/255)
             if lang_key == 'zh': self.zh_color = rgb
             else: self.en_color = rgb
@@ -319,21 +463,65 @@ class PDFHandwriterApp:
         if path:
             self.doc = fitz.open(path)
             self.current_page_num = 0
-            self.render_page()
+            # 强制更新GUI以确保画布尺寸可用
+            self.root.update_idletasks()
+            self.render_page(auto_zoom=True)
 
-    def render_page(self, preserve_rect=False):
+    def calculate_auto_zoom(self, page):
+        """计算自适应缩放比例使PDF页面完整显示在画布中"""
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        
+        # 如果画布尺寸未知，使用默认缩放
+        if canvas_width <= 10 or canvas_height <= 10:
+            return 1.5
+            
+        page_width = page.rect.width
+        page_height = page.rect.height
+        
+        # 计算宽高缩放比例，留出10px边距
+        width_ratio = (canvas_width - 20) / page_width
+        height_ratio = (canvas_height - 20) / page_height
+        
+        # 选择较小的比例确保页面完全显示
+        zoom = min(width_ratio, height_ratio)
+        
+        # 限制缩放范围在0.5到3.0之间
+        return max(0.5, min(zoom, 3.0))
+    
+    def fit_to_window(self):
+        """调整缩放使PDF页面完整显示在窗口中"""
+        if self.doc:
+            self.render_page(auto_zoom=True)
+    
+    def render_page(self, preserve_rect=False, auto_zoom=False):
         if not self.doc: return
         page = self.doc[self.current_page_num]
         self.page_label.config(text=f"页码: {self.current_page_num + 1} / {self.doc.page_count}")
+        
+        # 如果是首次加载或auto_zoom为True，计算自适应缩放
+        if auto_zoom:
+            self.zoom = self.calculate_auto_zoom(page)
+        
         pix = page.get_pixmap(matrix=fitz.Matrix(self.zoom, self.zoom))
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         self.tk_img = ImageTk.PhotoImage(img)
-        coords = self.canvas.coords(self.rect_id) if self.rect_id else None
+        
+        # 调整画布滚动区域以适应图像大小
+        self.canvas.config(scrollregion=(0, 0, pix.width, pix.height))
+        
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_img)
-        if preserve_rect and coords:
-            self.rect_id = self.canvas.create_rectangle(*coords, outline='red', width=2)
-        else: self.rect_id = None
+        
+        # 如果存在四边形且需要保留，重新创建
+        if preserve_rect and self.poly_id and self.quad_points:
+            self.update_quadrilateral()
+        else: 
+            self.poly_id = None
+            self.quad_points = []
+            for cp_id in self.control_points:
+                self.canvas.delete(cp_id)
+            self.control_points.clear()
 
     def save_to_history(self, doc_bytes):
         self.history.append(doc_bytes)
@@ -346,11 +534,16 @@ class PDFHandwriterApp:
         self.render_page()
 
     def erase_selection(self):
-        if not self.doc or not self.rect_id: return
+        if not self.doc or not self.poly_id or len(self.quad_points) < 8: return
         self.save_to_history(self.doc.write())
         page = self.doc[self.current_page_num]
-        rect = fitz.Rect(min(self.start_x, self.end_x)/self.zoom, min(self.start_y, self.end_y)/self.zoom,
-                         max(self.start_x, self.end_x)/self.zoom, max(self.start_y, self.end_y)/self.zoom)
+        # 使用四边形的最小包围矩形进行擦除
+        qp = self.quad_points
+        x1 = min(qp[0], qp[2], qp[4], qp[6]) / self.zoom
+        y1 = min(qp[1], qp[3], qp[5], qp[7]) / self.zoom
+        x2 = max(qp[0], qp[2], qp[4], qp[6]) / self.zoom
+        y2 = max(qp[1], qp[3], qp[5], qp[7]) / self.zoom
+        rect = fitz.Rect(x1, y1, x2, y2)
         page.add_redact_annot(rect, fill=(1, 1, 1))
         page.apply_redactions()
         self.render_page()
@@ -363,15 +556,86 @@ class PDFHandwriterApp:
         if self.doc and self.current_page_num < self.doc.page_count - 1:
             self.current_page_num += 1; self.render_page()
 
+    def update_quadrilateral(self):
+        """更新四边形显示和控制点"""
+        # 删除旧的多边形和控制点
+        if self.poly_id:
+            self.canvas.delete(self.poly_id)
+        for cp_id in self.control_points:
+            self.canvas.delete(cp_id)
+        self.control_points.clear()
+        
+        if not self.quad_points:
+            return
+            
+        # 创建多边形
+        self.poly_id = self.canvas.create_polygon(self.quad_points, outline='red', width=2, fill='')
+        
+        # 创建控制点（小圆点）
+        for i in range(0, len(self.quad_points), 2):
+            x, y = self.quad_points[i], self.quad_points[i+1]
+            cp = self.canvas.create_oval(x-5, y-5, x+5, y+5, fill='blue', outline='white', width=2, tags=f"control_{i//2}")
+            self.control_points.append(cp)
+    
     def on_button_press(self, event):
         self.start_x, self.start_y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
-        if self.rect_id: self.canvas.delete(self.rect_id)
-        self.rect_id = self.canvas.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y, outline='red', width=2)
+        
+        # 检查是否点击在控制点上
+        items = self.canvas.find_overlapping(event.x-6, event.y-6, event.x+6, event.y+6)
+        self.dragging_point = -1
+        for item in items:
+            tags = self.canvas.gettags(item)
+            for tag in tags:
+                if tag.startswith("control_"):
+                    self.dragging_point = int(tag.split("_")[1])
+                    return
+        
+        # 不是点击控制点，开始绘制新区域
+        if self.poly_id:
+            self.canvas.delete(self.poly_id)
+        for cp_id in self.control_points:
+            self.canvas.delete(cp_id)
+        self.control_points.clear()
+        self.quad_points = []
+        self.dragging_point = -1
+        
+        # 创建初始矩形（四边形）
+        self.quad_points = [
+            self.start_x, self.start_y,
+            self.start_x, self.start_y,
+            self.start_x, self.start_y,
+            self.start_x, self.start_y
+        ]
+        self.update_quadrilateral()
 
     def on_move_press(self, event):
-        self.end_x, self.end_y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
-        self.canvas.coords(self.rect_id, self.start_x, self.start_y, self.end_x, self.end_y)
+        x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+        
+        if self.dragging_point >= 0:
+            # 拖拽控制点
+            idx = self.dragging_point * 2
+            self.quad_points[idx] = x
+            self.quad_points[idx + 1] = y
+            self.update_quadrilateral()
+        elif self.quad_points:
+            # 拖拽绘制新区域（更新四边形为矩形）
+            x1, y1 = self.start_x, self.start_y
+            x2, y2 = x, y
+            
+            # 确保四边形顶点顺序：左上、右上、右下、左下
+            self.quad_points = [
+                min(x1, x2), min(y1, y2),  # 左上
+                max(x1, x2), min(y1, y2),  # 右上
+                max(x1, x2), max(y1, y2),  # 右下
+                min(x1, x2), max(y1, y2)   # 左下
+            ]
+            self.update_quadrilateral()
 
+    def on_button_release(self, event):
+        """鼠标释放事件处理"""
+        self.dragging_point = -1
+        self.auto_refresh_preview()
+    
     def refresh_template_list(self):
         names = [os.path.splitext(f)[0] for f in os.listdir(self.set_dir) if f.endswith('.json')]
         self.tpl_combo['values'] = names
