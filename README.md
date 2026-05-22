@@ -1,4 +1,5 @@
 # PDF_Handwrite
+ ![text](screenshots/fig.png)
 ## Project Overview
 The PDF Handwriting Simulator is a desktop application developed based on the Python `tkinter` (graphical user interface framework) and `PyMuPDF` (PDF processing library). It is designed to simulate natural handwritten text effects on PDF files, supporting custom Chinese and English handwriting styles, random jitter parameters, and real-time preview functionality. It can meet the needs of scenarios requiring handwritten-style PDF output, such as simulating handwritten homework and notes. In addition, it allows inserting images into PDF files with free adjustment of their sizes and positions. After downloading the corresponding model, it also supports AI image matting for images before insertion.
  ![text](screenshots/main_app.png)
