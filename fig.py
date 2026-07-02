@@ -85,13 +85,50 @@ class PDFImageEditor:
         self.preview_frame = tk.Frame(self.root, bg="gray")
         self.preview_frame.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH)
 
-        self.canvas = tk.Canvas(self.preview_frame, bg="gray", cursor="hand2")
-        self.canvas.pack(side=tk.LEFT, expand=True, fill=tk.BOTH)
+        self.preview_frame.rowconfigure(0, weight=1)
+        self.preview_frame.columnconfigure(0, weight=1)
+
+        y_scroll = tk.Scrollbar(self.preview_frame, orient=tk.VERTICAL)
+        x_scroll = tk.Scrollbar(self.preview_frame, orient=tk.HORIZONTAL)
+        self.canvas = tk.Canvas(
+            self.preview_frame,
+            bg="gray",
+            cursor="hand2",
+            xscrollcommand=x_scroll.set,
+            yscrollcommand=y_scroll.set,
+        )
+        y_scroll.config(command=self.canvas.yview)
+        x_scroll.config(command=self.canvas.xview)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        self.bind_canvas_scrolling()
 
         self.canvas.tag_bind("overlay", "<ButtonPress-1>", self.on_drag_start)
         self.canvas.tag_bind("overlay", "<B1-Motion>", self.on_drag_motion)
 
     # --- 页面切换逻辑 ---
+
+    def bind_canvas_scrolling(self):
+        self.canvas.bind("<MouseWheel>", self.on_canvas_mousewheel)
+        self.canvas.bind("<Shift-MouseWheel>", self.on_canvas_shift_mousewheel)
+        self.canvas.bind("<Button-4>", lambda event: self.canvas.yview_scroll(-1, "units"))
+        self.canvas.bind("<Button-5>", lambda event: self.canvas.yview_scroll(1, "units"))
+
+    def _wheel_units(self, event):
+        delta = getattr(event, "delta", 0)
+        if not delta:
+            return 0
+        steps = max(1, abs(delta) // 120)
+        return -steps if delta > 0 else steps
+
+    def on_canvas_mousewheel(self, event):
+        self.canvas.yview_scroll(self._wheel_units(event), "units")
+        return "break"
+
+    def on_canvas_shift_mousewheel(self, event):
+        self.canvas.xview_scroll(self._wheel_units(event), "units")
+        return "break"
 
     def load_pdf(self):
         path = filedialog.askopenfilename(filetypes=[("PDF Files", "*.pdf")])
@@ -141,6 +178,8 @@ class PDFImageEditor:
             self.canvas.delete("pdf_bg") 
             self.canvas.config(scrollregion=(0, 0, self.pdf_page_pixmap.width, self.pdf_page_pixmap.height))
             self.canvas.create_image(0, 0, image=self.tk_pdf_img, anchor=tk.NW, tags="pdf_bg")
+            self.canvas.xview_moveto(0)
+            self.canvas.yview_moveto(0)
             self.canvas.tag_lower("pdf_bg") # 确保背景在底层
 
     # --- 抠图与缩放逻辑 (保持并优化) ---

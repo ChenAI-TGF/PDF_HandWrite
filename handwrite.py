@@ -132,11 +132,29 @@ class PDFHandwriterApp:
         tk.Button(act_f, text="撤销", command=self.undo_action, bg="#e67e22", fg="white").pack(side=tk.LEFT, expand=True, fill=tk.X)
         tk.Button(act_f, text="擦除", command=self.erase_selection, bg="#c0392b", fg="white").pack(side=tk.LEFT, expand=True, fill=tk.X)
 
-        self.canvas = tk.Canvas(main_frame, bg="#bdc3c7", cursor="cross")
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        canvas_frame = tk.Frame(main_frame)
+        canvas_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        canvas_frame.rowconfigure(0, weight=1)
+        canvas_frame.columnconfigure(0, weight=1)
+
+        y_scroll = tk.Scrollbar(canvas_frame, orient=tk.VERTICAL)
+        x_scroll = tk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL)
+        self.canvas = tk.Canvas(
+            canvas_frame,
+            bg="#bdc3c7",
+            cursor="cross",
+            xscrollcommand=x_scroll.set,
+            yscrollcommand=y_scroll.set,
+        )
+        y_scroll.config(command=self.canvas.yview)
+        x_scroll.config(command=self.canvas.xview)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
         self.canvas.bind("<ButtonPress-1>", self.on_button_press)
         self.canvas.bind("<B1-Motion>", self.on_move_press)
         self.canvas.bind("<ButtonRelease-1>", self.auto_refresh_preview)
+        self.bind_canvas_scrolling()
 
     def build_param_tab(self, parent, lang_key):
         p = self.params[lang_key]
@@ -173,6 +191,27 @@ class PDFHandwriterApp:
     def create_scale(self, parent, label, var, f, t, res=1):
         tk.Label(parent, text=f"{label}:").pack(anchor=tk.W)
         tk.Scale(parent, from_=f, to=t, resolution=res, orient=tk.HORIZONTAL, variable=var).pack(fill=tk.X)
+
+    def bind_canvas_scrolling(self):
+        self.canvas.bind("<MouseWheel>", self.on_canvas_mousewheel)
+        self.canvas.bind("<Shift-MouseWheel>", self.on_canvas_shift_mousewheel)
+        self.canvas.bind("<Button-4>", lambda event: self.canvas.yview_scroll(-1, "units"))
+        self.canvas.bind("<Button-5>", lambda event: self.canvas.yview_scroll(1, "units"))
+
+    def _wheel_units(self, event):
+        delta = getattr(event, "delta", 0)
+        if not delta:
+            return 0
+        steps = max(1, abs(delta) // 120)
+        return -steps if delta > 0 else steps
+
+    def on_canvas_mousewheel(self, event):
+        self.canvas.yview_scroll(self._wheel_units(event), "units")
+        return "break"
+
+    def on_canvas_shift_mousewheel(self, event):
+        self.canvas.xview_scroll(self._wheel_units(event), "units")
+        return "break"
 
     def generate_handwriting_logic(self, is_preview=False):
         text = self.text_editor.get("1.0", tk.END).strip("\n")
@@ -325,15 +364,24 @@ class PDFHandwriterApp:
         if not self.doc: return
         page = self.doc[self.current_page_num]
         self.page_label.config(text=f"页码: {self.current_page_num + 1} / {self.doc.page_count}")
+        old_xview = self.canvas.xview()[0]
+        old_yview = self.canvas.yview()[0]
         pix = page.get_pixmap(matrix=fitz.Matrix(self.zoom, self.zoom))
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         self.tk_img = ImageTk.PhotoImage(img)
         coords = self.canvas.coords(self.rect_id) if self.rect_id else None
         self.canvas.delete("all")
+        self.canvas.config(scrollregion=(0, 0, pix.width, pix.height))
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_img)
         if preserve_rect and coords:
             self.rect_id = self.canvas.create_rectangle(*coords, outline='red', width=2)
         else: self.rect_id = None
+        if preserve_rect:
+            self.canvas.xview_moveto(old_xview)
+            self.canvas.yview_moveto(old_yview)
+        else:
+            self.canvas.xview_moveto(0)
+            self.canvas.yview_moveto(0)
 
     def save_to_history(self, doc_bytes):
         self.history.append(doc_bytes)
